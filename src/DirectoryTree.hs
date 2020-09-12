@@ -3,7 +3,7 @@ import System.Directory
 import System.Process
 import Data.Tree
 import Data.Time
-import Data.Time.LocalTime
+import Data.Time.Clock
 import Data.List.Split
 import Data.List
 import Data.Monoid
@@ -19,15 +19,6 @@ dirTreeToTree (File s i) = Node ((show i)++ " " ++ s) []
 dirTreeToTree (Directory s []) = Node s []
 dirTreeToTree (Directory s tl) = Node s (map dirTreeToTree tl)
 
--- Turns list containing IO wrapped values into
--- a IO wrapped list of values. 
-unwrapListMonads :: [IO a] -> IO [a]
-unwrapListMonads (m:ms) = do
-    entry <- m
-    remaining <- unwrapListMonads ms
-    return (entry:remaining)
-unwrapListMonads [] = return []
-
 -- Directory tree data structure
 data DirTree
    = Directory
@@ -39,51 +30,54 @@ data DirTree
    , fid :: Int
    } deriving (Show)
 
-lastModified :: FilePath -> IO LocalTime
-lastModified fpath = do 
-    (_,out,_) <- readProcessWithExitCode "stat" [fpath, "-c %y"] ""
+-- We only ever want to compare files 
+-- and directories by name
+instance Eq DirTree where
+    (Directory a _) == (Directory b _) = a == b
+    (File a _) == (File b _) = a == b
+    _ == _ = False
 
-    let (dateString:timeString:_) = words out
-    
-    let timestamp = head $ splitOn "." $ timeString
+type DiffInfo = ([String], [String], [String])
 
-    parsedDate <- parseTimeM True defaultTimeLocale "%Y-%0m-%0d" dateString :: IO Day
+data Commit = Commit { timestamp :: UTCTime, tree :: DirTree } deriving (Show)
 
-    parsedTimeOfDay <- parseTimeM True defaultTimeLocale "%T" timestamp :: IO TimeOfDay
-
-    return $ LocalTime parsedDate parsedTimeOfDay
-
-
--- Compares two directory trees for changes
-compareDirectoryTrees :: LocalTime -> DirTree -> FilePath -> IO ([String], [String], [String])
-compareDirectoryTrees lastCommit commitTree currentRoot = currentTree >>= runComparison commitTree 
+-- Collects DiffInfo ([Additions], [Modifications], [Deletions])
+-- between the current project directory and the previous commit
+collectDiffs :: Commit -> DirTree -> IO DiffInfo
+collectDiffs (Commit lastCommit commitTree) currentTree = runComparison commitTree currentTree
     where
-        currentTree = directoryToTree currentRoot
-
-        reduceUpdateTriples :: [([String], [String], [String])] -> ([String], [String], [String])
-        reduceUpdateTriples triples = foldl (\(a1,b1,c1) (a2,b2,c2) -> (a1++a2,b1++b2,c1++c2)) ([],[],[]) triples
-
         isFile :: DirTree -> Bool
         isFile (File _ _) = True
         isFile _ = False
 
-        runComparison :: DirTree -> DirTree -> IO ([String], [String], [String])
-        runComparison (File name1 id1) (File name2 id2) = do
-            fileModDate <- lastModified name2
+        runComparison :: DirTree -> DirTree -> IO DiffInfo
+        
+        runComparison (File name1 _) (File name2 _) = do
+            fileModDate <- getModificationTime name2
             if name1 == name2 && lastCommit >= fileModDate then
                  return ([], [], [])
             else if name1 == name2 && lastCommit < fileModDate then
                  return ([], [name2], [])
             else return ([name2], [], [name1])
-        runComparison (Directory path1 contents1) (Directory path2 contents2) = do
+
+        runComparison (Directory _ contents1) (Directory _ contents2) = do
             let oldFiles = map name $ filter isFile contents1
             let currentFiles = map name $ filter isFile contents2
 
-            let deletions = [([], [], oldFiles \\ currentFiles)]
-            let creations = [(currentFiles \\ oldFiles, [], [])]
+            let fileDeletions = [([], [], oldFiles \\ currentFiles)]
+            let fileCreations = [(currentFiles \\ oldFiles, [], [])]
+            
+            let contentDeletions = contents1 \\ contents2
+            let contentCreations = contents2 \\ contents1
+            let uncommonContent = contentDeletions ++ contentCreations
 
-            innerComparisons <- sequence $ map (uncurry runComparison) (zip contents1 contents2)
-            return . mconcat $ (creations ++ innerComparisons ++ deletions)
+            let commonContents1 = contents1 \\ uncommonContent
+            let commonContents2 = contents2 \\ uncommonContent
+
+            innerComparisons <- sequence $ map (uncurry runComparison) (zip commonContents1 commonContents2)
+            return . mconcat $ (fileCreations ++ innerComparisons ++ fileDeletions)
+        
+        runComparison _ _ = return ([], [], [])
 
 -- Turns directory into Tree FileID
 directoryToTree :: FilePath -> IO DirTree
@@ -103,7 +97,7 @@ directoryToTree path = entryToTree path
         let entryPaths = map ((path++"/")++) entryNames
 
         let subTreesMonadic = map entryToTree entryPaths
-        subTrees <- unwrapListMonads subTreesMonadic
+        subTrees <- sequence subTreesMonadic
 
         return $ Directory path subTrees
 
@@ -185,6 +179,3 @@ deleteTreeEntry p t = delEntry (pathToList p) t
         helper tar passed (entry:left)
             | name entry == tar         = Just (passed ++ left, entry)
             | otherwise                 = helper tar (entry:passed) left
-
-
-
