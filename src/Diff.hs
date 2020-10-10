@@ -98,5 +98,3 @@ parseChangeBlock = do
 -- Full diff output parser
 pDiff :: Parsec String () Diff
 pDiff = many parseChangeBlock
-    
-

@@ -61,11 +61,11 @@ collectDiffs (Commit lastCommit commitTree) currentTree = runComparison commitTr
             else return ([name2], [], [name1])
 
         runComparison (Directory _ contents1) (Directory _ contents2) = do
-            let oldFiles = map name $ filter isFile contents1
-            let currentFiles = map name $ filter isFile contents2
+            let oldFiles        = map name $ filter isFile contents1
+            let currentFiles    = map name $ filter isFile contents2
 
-            let fileDeletions = [([], [], oldFiles \\ currentFiles)]
-            let fileCreations = [(currentFiles \\ oldFiles, [], [])]
+            let fileDeletions   = [([], [], oldFiles \\ currentFiles)]
+            let fileCreations   = [(currentFiles \\ oldFiles, [], [])]
             
             let contentDeletions = contents1 \\ contents2
             let contentCreations = contents2 \\ contents1
@@ -79,7 +79,7 @@ collectDiffs (Commit lastCommit commitTree) currentTree = runComparison commitTr
         
         runComparison _ _ = return ([], [], [])
 
--- Turns directory into Tree FileID
+-- Turns directory into Tree
 directoryToTree :: FilePath -> IO DirTree
 directoryToTree path = entryToTree path
     where
